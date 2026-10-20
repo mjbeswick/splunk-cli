@@ -59,7 +59,10 @@ mod tests {
         let panels = parse_panels(xml);
         assert_eq!(panels.len(), 1);
         assert_eq!(panels[0].title, "Errors over time");
-        assert_eq!(panels[0].search, "index=ghs_ppe level=ERROR | timechart count");
+        assert_eq!(
+            panels[0].search,
+            "index=ghs_ppe level=ERROR | timechart count"
+        );
     }
 
     #[test]

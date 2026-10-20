@@ -20,6 +20,19 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub debug: bool,
 
+    /// Sign in using a dedicated Chrome profile controlled locally through DevTools
+    #[arg(long, global = true)]
+    pub chrome_auth: bool,
+
+    /// Dedicated Chrome profile name managed by the CLI (not your regular profile)
+    #[arg(
+        long,
+        global = true,
+        requires = "chrome_auth",
+        default_value = "Default"
+    )]
+    pub chrome_profile: String,
+
     #[command(subcommand)]
     pub command: Commands,
 }

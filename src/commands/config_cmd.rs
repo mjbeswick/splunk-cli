@@ -1,5 +1,5 @@
 use crate::cli::ConfigCommands;
-use crate::config::{config_path, Config};
+use crate::config::{Config, config_path};
 use crate::error::Result;
 
 pub fn handle_config(cmd: &ConfigCommands) -> Result<()> {
@@ -23,7 +23,10 @@ pub fn handle_config(cmd: &ConfigCommands) -> Result<()> {
                 cfg.default_profile = Some(profile.clone());
             }
             cfg.save()?;
-            println!("Saved Bearer token for profile '{profile}' -> {}", config_path()?.display());
+            println!(
+                "Saved Bearer token for profile '{profile}' -> {}",
+                config_path()?.display()
+            );
         }
         ConfigCommands::SetCookie {
             cookie,
@@ -74,7 +77,9 @@ pub fn handle_config(cmd: &ConfigCommands) -> Result<()> {
                 };
                 println!(
                     "  - {name}: {auth_kind}, base_url={}",
-                    p.base_url.as_deref().unwrap_or("https://splunk-operations.ocset.net")
+                    p.base_url
+                        .as_deref()
+                        .unwrap_or("https://splunk-operations.ocset.net")
                 );
             }
         }

@@ -10,7 +10,9 @@ pub async fn handle_dashboards(
 ) -> Result<()> {
     match cmd {
         DashboardCommands::List { app, filter } => {
-            let items = client.get_dashboards(app.as_deref(), filter.as_deref()).await?;
+            let items = client
+                .get_dashboards(app.as_deref(), filter.as_deref())
+                .await?;
             output::print_dashboards(&items, format);
         }
         DashboardCommands::Panels { name, app } => {

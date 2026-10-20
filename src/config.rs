@@ -83,10 +83,7 @@ impl Config {
 
         // Env vars always win, so a quick override (e.g. refreshed cookie)
         // doesn't require editing the config file.
-        let base_url = std::env::var("SPLUNK_CLI_BASE_URL")
-            .ok()
-            .or(profile.base_url)
-            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+        let base_url = self.resolve_base_url(profile_name);
 
         let token = std::env::var("SPLUNK_CLI_TOKEN").ok().or(profile.token);
         let cookie = std::env::var("SPLUNK_CLI_COOKIE").ok().or(profile.cookie);
@@ -104,5 +101,16 @@ impl Config {
             cookie,
             form_key,
         })
+    }
+
+    pub fn resolve_base_url(&self, profile_name: Option<&str>) -> String {
+        let name = profile_name
+            .map(str::to_string)
+            .or_else(|| self.default_profile.clone())
+            .unwrap_or_else(|| "default".to_string());
+        std::env::var("SPLUNK_CLI_BASE_URL")
+            .ok()
+            .or_else(|| self.profiles.get(&name).and_then(|p| p.base_url.clone()))
+            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
     }
 }

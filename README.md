@@ -38,6 +38,24 @@ profile:
   splunk config set-cookie --cookie "<full Cookie header>" --form-key "<splunkweb_csrf_token_8000 value>"
   ```
 
+- **Chrome browser sign-in** (macOS only; uses a dedicated Chrome profile for
+  the CLI, separate from your regular Chrome profile):
+
+  ```bash
+  splunk --chrome-auth search 'index=ghs_ppe level=ERROR'
+  splunk --chrome-auth --chrome-profile work search 'index=ghs_ppe level=ERROR'
+  ```
+
+  The first use opens a dedicated Chrome profile and requires sign-in to
+  Splunk. Chrome is started with a local-only DevTools endpoint for that profile;
+  the CLI does not read cookies from your regular Chrome profile or ask for its
+  Safe Storage key. The profile is stored under `~/.config/splunk-cli/chrome-cdp`
+  with owner-only directory permissions. The CLI uses the browser session only
+  for the configured Splunk host. If the session expires, it opens the login
+  page and automatically waits up to five minutes for sign-in. Commands that
+  dispatch search jobs refresh the session and ask you to rerun the command to
+  avoid accidentally launching duplicate jobs.
+
 Config is stored at `~/.config/splunk-cli/config.toml`. Multiple profiles are
 supported via `--profile <name>` on any command and `splunk config set-token/
 set-cookie --profile <name>`; set the default with `splunk config use-profile <name>`.
@@ -78,12 +96,35 @@ splunk dashboards panels "GHS Overview"
 
 # Raw JSON output (scripting / piping to jq)
 splunk --json search 'index=ghs_ppe level=ERROR' | jq '.results[].message'
-
-# Shell completions
-splunk completions zsh > ~/.zfunc/_splunk
 ```
 
 Run `splunk <command> --help` for full flag reference on any subcommand.
+
+### Shell completions
+
+Generate and install completions for your shell. Re-run the command after
+upgrading `splunk` so the completions reflect the installed CLI. These examples
+assume the corresponding shell completion support is enabled:
+
+```bash
+# Bash (bash-completion)
+mkdir -p ~/.local/share/bash-completion/completions
+splunk completions bash > ~/.local/share/bash-completion/completions/splunk
+
+# Zsh: add ~/.zfunc to fpath before compinit in ~/.zshrc, if not already present
+mkdir -p ~/.zfunc
+splunk completions zsh > ~/.zfunc/_splunk
+
+# Fish
+mkdir -p ~/.config/fish/completions
+splunk completions fish > ~/.config/fish/completions/splunk.fish
+```
+
+For Zsh, ensure `fpath=(~/.zfunc $fpath)` appears before
+`autoload -Uz compinit && compinit` in `~/.zshrc`; restart the shell or reload
+the relevant completion setup after installation. `splunk completions --help`
+lists all supported generators (`bash`, `elvish`, `fish`, `powershell`, and
+`zsh`).
 
 ## Output
 

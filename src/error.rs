@@ -17,6 +17,14 @@ pub enum SplunkError {
     )]
     AuthFailed { status: u16 },
 
+    #[error(
+        "Splunk session expired or was rejected: {message}\nRefresh API credentials with `splunk config set-token <TOKEN>` or `splunk config set-cookie ...`; for browser authentication, use `splunk --chrome-auth <command>`."
+    )]
+    SessionExpired { message: String },
+
+    #[error("Chrome session was refreshed; rerun this command to retry")]
+    SessionRenewed,
+
     #[error("Splunk request failed ({status}): {message}")]
     RequestFailed { status: u16, message: String },
 

@@ -1,3 +1,4 @@
+mod chrome_auth;
 mod cli;
 mod client;
 mod commands;
@@ -9,14 +10,18 @@ mod types;
 use clap::{CommandFactory, Parser};
 use cli::{Cli, Commands};
 use client::SplunkClient;
-use config::Config;
+use config::{Config, ResolvedAuth};
 use error::SplunkError;
 use output::Format;
 
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    let format = if cli.json { Format::Json } else { Format::Table };
+    let format = if cli.json {
+        Format::Json
+    } else {
+        Format::Table
+    };
 
     if let Err(e) = run(cli, format).await {
         eprintln!("Error: {e}");
@@ -40,13 +45,27 @@ async fn run(cli: Cli, format: Format) -> error::Result<()> {
     }
 
     let cfg = Config::load()?;
-    let auth = match cfg.resolve(cli.profile.as_deref()) {
+    let auth_result = if cli.chrome_auth {
+        let base_url = cfg.resolve_base_url(cli.profile.as_deref());
+        let (cookie, form_key) =
+            chrome_auth::open_login_and_wait(&base_url, &cli.chrome_profile, None, false).await?;
+        Ok(ResolvedAuth {
+            base_url,
+            token: None,
+            cookie: Some(cookie),
+            form_key: Some(form_key),
+        })
+    } else {
+        cfg.resolve(cli.profile.as_deref())
+    };
+    let auth = match auth_result {
         Ok(a) => a,
         Err(SplunkError::NotConfigured) => {
             eprintln!(
                 "Not authenticated. Set up a profile first:\n  \
                  splunk config set-token <TOKEN>\n  \
-                 splunk config set-cookie --cookie <COOKIE> --form-key <KEY>\n\n\
+                 splunk config set-cookie --cookie <COOKIE> --form-key <KEY>\n  \
+                 splunk --chrome-auth <command>  (use existing Chrome session)\n\n\
                  Or override per-invocation with env vars:\n  \
                  SPLUNK_CLI_TOKEN=... splunk search ...\n  \
                  SPLUNK_CLI_COOKIE=... SPLUNK_CLI_FORM_KEY=... splunk search ..."
@@ -56,12 +75,18 @@ async fn run(cli: Cli, format: Format) -> error::Result<()> {
         Err(e) => return Err(e),
     };
 
-    let client = SplunkClient::new(auth, cli.debug)?;
+    let client = if cli.chrome_auth {
+        SplunkClient::new_with_chrome_auth(auth, cli.debug, cli.chrome_profile.clone())?
+    } else {
+        SplunkClient::new(auth, cli.debug)?
+    };
 
     match cli.command {
         Commands::Search(args) => commands::handle_search(&client, &args, true, format).await,
         Commands::SearchAsync(args) => commands::handle_search(&client, &args, false, format).await,
-        Commands::SavedSearches(cmd) => commands::handle_saved_searches(&client, &cmd, format).await,
+        Commands::SavedSearches(cmd) => {
+            commands::handle_saved_searches(&client, &cmd, format).await
+        }
         Commands::Alerts { count } => commands::handle_alerts(&client, count, format).await,
         Commands::Indexes => commands::handle_indexes(&client, format).await,
         Commands::Dashboards(cmd) => commands::handle_dashboards(&client, &cmd, format).await,

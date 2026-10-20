@@ -11,11 +11,21 @@ pub async fn handle_search(
 ) -> Result<()> {
     let results = if oneshot {
         client
-            .oneshot_search(&args.query, &args.earliest_time, &args.latest_time, args.max_results)
+            .oneshot_search(
+                &args.query,
+                &args.earliest_time,
+                &args.latest_time,
+                args.max_results,
+            )
             .await?
     } else {
         client
-            .async_search(&args.query, &args.earliest_time, &args.latest_time, args.max_results)
+            .async_search(
+                &args.query,
+                &args.earliest_time,
+                &args.latest_time,
+                args.max_results,
+            )
             .await?
     };
 
