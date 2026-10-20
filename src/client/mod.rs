@@ -154,7 +154,7 @@ impl SplunkClient {
             let body = resp.text().await.unwrap_or_default();
             let message = extract_splunk_message(&body).unwrap_or(body);
             if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-                if auth.token.is_none() {
+                if is_chrome_session_auth(&self.chrome_profile) {
                     return Err(SplunkError::SessionExpired {
                         message: format!("request returned HTTP {}", status.as_u16()),
                     });
@@ -206,8 +206,20 @@ impl SplunkClient {
             .await
             {
                 Err(SplunkError::SessionExpired { .. }) => {
-                    crate::chrome_auth::open_login_and_wait(&auth.base_url, profile, None, true)
-                        .await?;
+                    let previous_cookie = auth.cookie.as_deref().unwrap_or_default();
+                    let previous_form_key = auth.form_key.as_deref().unwrap_or_default();
+                    let (cookie, form_key) = crate::chrome_auth::open_login_and_wait(
+                        &auth.base_url,
+                        profile,
+                        Some((previous_cookie, previous_form_key)),
+                        true,
+                    )
+                    .await?;
+                    {
+                        let mut current = self.auth.write().expect("auth lock poisoned");
+                        current.cookie = Some(cookie);
+                        current.form_key = Some(form_key);
+                    }
                     crate::chrome_auth::run_oneshot_search(
                         &auth.base_url,
                         profile,
@@ -237,25 +249,7 @@ impl SplunkClient {
             .await?;
 
         let raw = resp.text().await?;
-        let mut results = Vec::new();
-        for line in raw.lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(line)
-                && let Some(result) = parsed.get("result")
-                && let Ok(row) = serde_json::from_value::<SplunkResultRow>(result.clone())
-            {
-                results.push(row);
-            }
-        }
-
-        Ok(SplunkResults {
-            results,
-            fields: Vec::new(),
-            preview: false,
-        })
+        parse_export_results(&raw)
     }
 
     pub async fn async_search(
@@ -578,6 +572,10 @@ fn is_safe_retry(method: &Method, path: &str) -> bool {
     method == Method::GET || (method == Method::POST && path == "/services/search/jobs/export")
 }
 
+fn is_chrome_session_auth(chrome_profile: &Option<String>) -> bool {
+    chrome_profile.is_some()
+}
+
 fn normalize_query(query: &str) -> String {
     if query.trim_start().starts_with("search ") || query.trim_start().starts_with('|') {
         query.to_string()
@@ -616,7 +614,7 @@ impl AclDefault for Option<Acl> {
 
 #[cfg(test)]
 mod auth_tests {
-    use super::{is_login_redirect, is_safe_retry, parse_export_results};
+    use super::{is_chrome_session_auth, is_login_redirect, is_safe_retry, parse_export_results};
 
     #[test]
     fn recognizes_splunk_login_redirects() {
@@ -651,6 +649,13 @@ mod auth_tests {
             &reqwest::Method::POST,
             "/services/saved/searches/test/dispatch"
         ));
+    }
+
+    #[test]
+    fn manual_cookie_auth_does_not_use_chrome_session_error() {
+        let chrome_profile: Option<String> = None;
+        assert!(!is_chrome_session_auth(&chrome_profile));
+        assert!(is_chrome_session_auth(&Some("Default".into())));
     }
 
     #[test]
