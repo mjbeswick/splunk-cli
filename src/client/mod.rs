@@ -4,6 +4,7 @@ use crate::config::ResolvedAuth;
 use crate::error::{Result, SplunkError};
 use crate::types::*;
 use reqwest::{Client as HttpClient, Method, StatusCode};
+use std::sync::RwLock;
 use std::time::Duration;
 
 const POLL_INTERVAL_MS: u64 = 200;
@@ -12,7 +13,8 @@ const REQUEST_TIMEOUT_SECS: u64 = 30;
 
 pub struct SplunkClient {
     http: HttpClient,
-    auth: ResolvedAuth,
+    auth: RwLock<ResolvedAuth>,
+    chrome_profile: Option<String>,
     pub debug: bool,
 }
 
@@ -21,7 +23,22 @@ impl SplunkClient {
         let http = HttpClient::builder()
             .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
             .build()?;
-        Ok(Self { http, auth, debug })
+        Ok(Self {
+            http,
+            auth: RwLock::new(auth),
+            chrome_profile: None,
+            debug,
+        })
+    }
+
+    pub fn new_with_chrome_auth(
+        auth: ResolvedAuth,
+        debug: bool,
+        chrome_profile: String,
+    ) -> Result<Self> {
+        let mut client = Self::new(auth, debug)?;
+        client.chrome_profile = Some(chrome_profile);
+        Ok(client)
     }
 
     fn log(&self, msg: &str) {
@@ -31,15 +48,19 @@ impl SplunkClient {
     }
 
     fn url(&self, path: &str) -> String {
-        format!("{}/en-GB/splunkd/__raw{}", self.auth.base_url, path)
+        let auth = self.auth.read().expect("auth lock poisoned");
+        format!("{}/en-GB/splunkd/__raw{}", auth.base_url, path)
     }
 
-    fn apply_auth(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        if let Some(token) = &self.auth.token {
+    fn apply_auth(
+        auth: &ResolvedAuth,
+        builder: reqwest::RequestBuilder,
+    ) -> reqwest::RequestBuilder {
+        if let Some(token) = &auth.token {
             builder.header("Authorization", format!("Splunk {token}"))
         } else {
-            let cookie = self.auth.cookie.clone().unwrap_or_default();
-            let form_key = self.auth.form_key.clone().unwrap_or_default();
+            let cookie = auth.cookie.clone().unwrap_or_default();
+            let form_key = auth.form_key.clone().unwrap_or_default();
             builder
                 .header("Cookie", cookie)
                 .header("x-splunk-form-key", form_key)
@@ -53,9 +74,47 @@ impl SplunkClient {
         query: Option<&[(&str, String)]>,
         form_body: Option<&[(&str, String)]>,
     ) -> Result<reqwest::Response> {
+        match self
+            .request_attempt(method.clone(), path, query, form_body)
+            .await
+        {
+            Err(SplunkError::SessionExpired) if self.chrome_profile.is_some() => {
+                let can_retry = is_safe_retry(&method, path);
+                let profile = self.chrome_profile.as_ref().expect("checked above");
+                let base_url = self
+                    .auth
+                    .read()
+                    .expect("auth lock poisoned")
+                    .base_url
+                    .clone();
+                crate::chrome_auth::open_login_and_wait(&base_url, can_retry)?;
+                let (cookie, form_key) = crate::chrome_auth::read_chrome_auth(&base_url, profile)?;
+                {
+                    let mut auth = self.auth.write().expect("auth lock poisoned");
+                    auth.cookie = Some(cookie);
+                    auth.form_key = Some(form_key);
+                }
+                if can_retry {
+                    self.request_attempt(method, path, query, form_body).await
+                } else {
+                    Err(SplunkError::SessionRenewed)
+                }
+            }
+            result => result,
+        }
+    }
+
+    async fn request_attempt(
+        &self,
+        method: Method,
+        path: &str,
+        query: Option<&[(&str, String)]>,
+        form_body: Option<&[(&str, String)]>,
+    ) -> Result<reqwest::Response> {
         let url = self.url(path);
         let mut builder = self.http.request(method, &url);
-        builder = self.apply_auth(builder);
+        let auth = self.auth.read().expect("auth lock poisoned").clone();
+        builder = Self::apply_auth(&auth, builder);
 
         if let Some(q) = query {
             builder = builder.query(q);
@@ -67,11 +126,17 @@ impl SplunkClient {
         self.log(&format!("-> {url}"));
         let resp = builder.send().await?;
         let status = resp.status();
+        if is_login_redirect(resp.url()) {
+            return Err(SplunkError::SessionExpired);
+        }
 
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
             let message = extract_splunk_message(&body).unwrap_or(body);
             if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+                if auth.token.is_none() {
+                    return Err(SplunkError::SessionExpired);
+                }
                 return Err(SplunkError::AuthFailed {
                     status: status.as_u16(),
                 });
@@ -396,6 +461,15 @@ impl SplunkClient {
     }
 }
 
+fn is_login_redirect(url: &reqwest::Url) -> bool {
+    url.path().ends_with("/account/login")
+        || url.query().is_some_and(|q| q.contains("session_expired=1"))
+}
+
+fn is_safe_retry(method: &Method, path: &str) -> bool {
+    method == Method::GET || (method == Method::POST && path == "/services/search/jobs/export")
+}
+
 fn normalize_query(query: &str) -> String {
     if query.trim_start().starts_with("search ") || query.trim_start().starts_with('|') {
         query.to_string()
@@ -429,5 +503,45 @@ impl AclDefault for Option<Acl> {
             owner: String::new(),
             app: String::new(),
         })
+    }
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use super::{is_login_redirect, is_safe_retry};
+
+    #[test]
+    fn recognizes_splunk_login_redirects() {
+        assert!(is_login_redirect(
+            &reqwest::Url::parse("https://example.test/en-GB/account/login?session_expired=1")
+                .unwrap()
+        ));
+        assert!(is_login_redirect(
+            &reqwest::Url::parse("https://example.test/en-GB/account/login").unwrap()
+        ));
+        assert!(!is_login_redirect(
+            &reqwest::Url::parse("https://example.test/en-GB/splunkd/__raw/services/search/jobs")
+                .unwrap()
+        ));
+    }
+
+    #[test]
+    fn retries_only_reads_and_oneshot_searches_after_refresh() {
+        assert!(is_safe_retry(
+            &reqwest::Method::GET,
+            "/services/data/indexes"
+        ));
+        assert!(is_safe_retry(
+            &reqwest::Method::POST,
+            "/services/search/jobs/export"
+        ));
+        assert!(!is_safe_retry(
+            &reqwest::Method::POST,
+            "/services/search/jobs"
+        ));
+        assert!(!is_safe_retry(
+            &reqwest::Method::POST,
+            "/services/saved/searches/test/dispatch"
+        ));
     }
 }

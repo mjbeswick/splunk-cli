@@ -119,16 +119,50 @@ pub fn read_chrome_auth(base_url: &str, profile: &str) -> Result<(String, String
     }
 
     if cookie_pairs.is_empty() {
-        return Err(SplunkError::Config(format!(
-            "no cookies found for Splunk host '{host}' in Chrome profile '{profile}'"
-        )));
+        return Err(SplunkError::ChromeSessionUnavailable);
     }
-    let form_key = form_key.ok_or_else(|| {
-        SplunkError::Config(format!(
-            "Splunk CSRF cookie not found for host '{host}'; sign in to Splunk in Chrome first"
-        ))
-    })?;
+    let form_key = form_key.ok_or(SplunkError::ChromeSessionUnavailable)?;
     Ok((cookie_pairs.join("; "), form_key))
+}
+
+#[cfg(target_os = "macos")]
+pub fn open_login_and_wait(base_url: &str, will_retry: bool) -> Result<()> {
+    use std::io::{IsTerminal, Write};
+
+    if !std::io::stdin().is_terminal() {
+        return Err(SplunkError::Config(
+            "Chrome session expired; rerun from an interactive terminal to sign in".into(),
+        ));
+    }
+
+    let login_url = format!("{}/en-GB/account/login", base_url.trim_end_matches('/'));
+    let status = Command::new("open")
+        .args(["-a", "Google Chrome", &login_url])
+        .status()
+        .map_err(|e| SplunkError::Config(format!("could not open Chrome: {e}")))?;
+    if !status.success() {
+        return Err(SplunkError::Config(
+            "could not open Chrome for Splunk sign-in".into(),
+        ));
+    }
+
+    eprintln!("Your Splunk Chrome session has expired. Sign in to Splunk in Chrome.");
+    if will_retry {
+        eprint!("Press Enter after signing in to retry this request once... ");
+    } else {
+        eprint!("Press Enter after signing in, then rerun the command... ");
+    }
+    std::io::stderr().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn open_login_and_wait(_base_url: &str) -> Result<()> {
+    Err(SplunkError::Config(
+        "automatic Chrome re-authentication is currently supported only on macOS".into(),
+    ))
 }
 
 fn cookie_path_matches(cookie_path: &str, request_path: &str) -> bool {

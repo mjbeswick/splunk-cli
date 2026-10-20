@@ -49,7 +49,11 @@ profile:
   Chrome must already be signed in to Splunk. The first use may prompt for
   Keychain access to Chrome Safe Storage. Only cookies for the configured
   Splunk host are read; cookie encryption formats not supported by Chrome's
-  local Safe Storage key cannot be used by this option.
+  local Safe Storage key cannot be used by this option. If the session expires,
+  the CLI opens Splunk in Chrome, waits for you to sign in and press Enter, then
+  retries the current safe-to-repeat request once. Commands that dispatch
+  search jobs refresh the session and ask you to rerun the command to avoid
+  accidentally launching duplicate jobs.
 
 Config is stored at `~/.config/splunk-cli/config.toml`. Multiple profiles are
 supported via `--profile <name>` on any command and `splunk config set-token/

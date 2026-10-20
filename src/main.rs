@@ -43,13 +43,20 @@ async fn run(cli: Cli, format: Format) -> error::Result<()> {
     let cfg = Config::load()?;
     let auth_result = if cli.chrome_auth {
         let base_url = cfg.resolve_base_url(cli.profile.as_deref());
-        chrome_auth::read_chrome_auth(&base_url, &cli.chrome_profile).map(|(cookie, form_key)| {
-            ResolvedAuth {
-                base_url,
-                token: None,
-                cookie: Some(cookie),
-                form_key: Some(form_key),
+        let chrome_auth = chrome_auth::read_chrome_auth(&base_url, &cli.chrome_profile);
+        let chrome_auth = match chrome_auth {
+            Err(SplunkError::ChromeSessionUnavailable) => {
+                chrome_auth::open_login_and_wait(&base_url, true)?;
+                chrome_auth::read_chrome_auth(&base_url, &cli.chrome_profile)?
             }
+            other => other?,
+        };
+        let (cookie, form_key) = chrome_auth;
+        Ok(ResolvedAuth {
+            base_url,
+            token: None,
+            cookie: Some(cookie),
+            form_key: Some(form_key),
         })
     } else {
         cfg.resolve(cli.profile.as_deref())
@@ -71,7 +78,11 @@ async fn run(cli: Cli, format: Format) -> error::Result<()> {
         Err(e) => return Err(e),
     };
 
-    let client = SplunkClient::new(auth, cli.debug)?;
+    let client = if cli.chrome_auth {
+        SplunkClient::new_with_chrome_auth(auth, cli.debug, cli.chrome_profile.clone())?
+    } else {
+        SplunkClient::new(auth, cli.debug)?
+    };
 
     match cli.command {
         Commands::Search(args) => commands::handle_search(&client, &args, true, format).await,
