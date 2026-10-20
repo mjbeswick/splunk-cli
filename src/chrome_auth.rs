@@ -346,7 +346,6 @@ async fn ensure_chrome_running(user_data_dir: &std::path::Path, base_url: &str) 
         std::fs::remove_file(&active_port)?;
     }
 
-    let _ = std::fs::remove_file(active_port);
     let chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
     let status = Command::new(chrome)
         .arg("--remote-debugging-port=0")

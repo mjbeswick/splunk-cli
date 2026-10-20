@@ -48,7 +48,7 @@ async fn run(cli: Cli, format: Format) -> error::Result<()> {
     let auth_result = if cli.chrome_auth {
         let base_url = cfg.resolve_base_url(cli.profile.as_deref());
         let (cookie, form_key) =
-            chrome_auth::open_login_and_wait(&base_url, &cli.chrome_profile, None, true).await?;
+            chrome_auth::open_login_and_wait(&base_url, &cli.chrome_profile, None, false).await?;
         Ok(ResolvedAuth {
             base_url,
             token: None,
