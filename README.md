@@ -38,22 +38,23 @@ profile:
   splunk config set-cookie --cookie "<full Cookie header>" --form-key "<splunkweb_csrf_token_8000 value>"
   ```
 
-- **Existing Chrome session** (macOS only; reads host-scoped cookies from the
-  selected Chrome profile for one invocation, without saving them):
+- **Chrome browser sign-in** (macOS only; uses a dedicated Chrome profile for
+  the CLI, separate from your regular Chrome profile):
 
   ```bash
   splunk --chrome-auth search 'index=ghs_ppe level=ERROR'
-  splunk --chrome-auth --chrome-profile "Profile 1" search 'index=ghs_ppe level=ERROR'
+  splunk --chrome-auth --chrome-profile work search 'index=ghs_ppe level=ERROR'
   ```
 
-  Chrome must already be signed in to Splunk. The first use may prompt for
-  Keychain access to Chrome Safe Storage. Only cookies for the configured
-  Splunk host are read; cookie encryption formats not supported by Chrome's
-  local Safe Storage key cannot be used by this option. If the session expires,
-  the CLI opens Splunk in Chrome, waits for you to sign in and press Enter, then
-  retries the current safe-to-repeat request once. Commands that dispatch
-  search jobs refresh the session and ask you to rerun the command to avoid
-  accidentally launching duplicate jobs.
+  The first use opens a dedicated Chrome profile and requires sign-in to
+  Splunk. Chrome is started with a local-only DevTools endpoint for that profile;
+  the CLI does not read cookies from your regular Chrome profile or ask for its
+  Safe Storage key. The profile is stored under `~/.config/splunk-cli/chrome-cdp`
+  with owner-only directory permissions. The CLI uses the browser session only
+  for the configured Splunk host. If the session expires, it opens the login
+  page and automatically waits up to five minutes for sign-in. Commands that
+  dispatch search jobs refresh the session and ask you to rerun the command to
+  avoid accidentally launching duplicate jobs.
 
 Config is stored at `~/.config/splunk-cli/config.toml`. Multiple profiles are
 supported via `--profile <name>` on any command and `splunk config set-token/

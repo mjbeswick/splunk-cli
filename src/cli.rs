@@ -20,11 +20,11 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub debug: bool,
 
-    /// Use cookies from the signed-in Chrome profile for this invocation
+    /// Sign in using a dedicated Chrome profile controlled locally through DevTools
     #[arg(long, global = true)]
     pub chrome_auth: bool,
 
-    /// Chrome profile directory name to read (for example, "Default" or "Profile 1")
+    /// Dedicated Chrome profile name managed by the CLI (not your regular profile)
     #[arg(
         long,
         global = true,

@@ -43,15 +43,8 @@ async fn run(cli: Cli, format: Format) -> error::Result<()> {
     let cfg = Config::load()?;
     let auth_result = if cli.chrome_auth {
         let base_url = cfg.resolve_base_url(cli.profile.as_deref());
-        let chrome_auth = chrome_auth::read_chrome_auth(&base_url, &cli.chrome_profile);
-        let chrome_auth = match chrome_auth {
-            Err(SplunkError::ChromeSessionUnavailable) => {
-                chrome_auth::open_login_and_wait(&base_url, true)?;
-                chrome_auth::read_chrome_auth(&base_url, &cli.chrome_profile)?
-            }
-            other => other?,
-        };
-        let (cookie, form_key) = chrome_auth;
+        let (cookie, form_key) =
+            chrome_auth::open_login_and_wait(&base_url, &cli.chrome_profile, None, true).await?;
         Ok(ResolvedAuth {
             base_url,
             token: None,

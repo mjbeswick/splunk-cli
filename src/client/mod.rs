@@ -15,6 +15,7 @@ pub struct SplunkClient {
     http: HttpClient,
     auth: RwLock<ResolvedAuth>,
     chrome_profile: Option<String>,
+    chrome_auth: bool,
     pub debug: bool,
 }
 
@@ -27,6 +28,7 @@ impl SplunkClient {
             http,
             auth: RwLock::new(auth),
             chrome_profile: None,
+            chrome_auth: false,
             debug,
         })
     }
@@ -38,6 +40,7 @@ impl SplunkClient {
     ) -> Result<Self> {
         let mut client = Self::new(auth, debug)?;
         client.chrome_profile = Some(chrome_profile);
+        client.chrome_auth = true;
         Ok(client)
     }
 
@@ -61,9 +64,15 @@ impl SplunkClient {
         } else {
             let cookie = auth.cookie.clone().unwrap_or_default();
             let form_key = auth.form_key.clone().unwrap_or_default();
+            let origin = auth.base_url.trim_end_matches('/');
             builder
                 .header("Cookie", cookie)
                 .header("x-splunk-form-key", form_key)
+                .header("Origin", origin)
+                .header(
+                    "Referer",
+                    format!("{origin}/en-GB/app/launcher/splunk_home_page"),
+                )
         }
     }
 
@@ -78,17 +87,20 @@ impl SplunkClient {
             .request_attempt(method.clone(), path, query, form_body)
             .await
         {
-            Err(SplunkError::SessionExpired) if self.chrome_profile.is_some() => {
+            Err(SplunkError::SessionExpired { .. }) if self.chrome_profile.is_some() => {
                 let can_retry = is_safe_retry(&method, path);
                 let profile = self.chrome_profile.as_ref().expect("checked above");
-                let base_url = self
-                    .auth
-                    .read()
-                    .expect("auth lock poisoned")
-                    .base_url
-                    .clone();
-                crate::chrome_auth::open_login_and_wait(&base_url, can_retry)?;
-                let (cookie, form_key) = crate::chrome_auth::read_chrome_auth(&base_url, profile)?;
+                let auth = self.auth.read().expect("auth lock poisoned").clone();
+                let base_url = auth.base_url.clone();
+                let previous_cookie = auth.cookie.unwrap_or_default();
+                let previous_form_key = auth.form_key.unwrap_or_default();
+                let (cookie, form_key) = crate::chrome_auth::open_login_and_wait(
+                    &base_url,
+                    profile,
+                    Some((&previous_cookie, &previous_form_key)),
+                    can_retry,
+                )
+                .await?;
                 {
                     let mut auth = self.auth.write().expect("auth lock poisoned");
                     auth.cookie = Some(cookie);
@@ -112,7 +124,7 @@ impl SplunkClient {
         form_body: Option<&[(&str, String)]>,
     ) -> Result<reqwest::Response> {
         let url = self.url(path);
-        let mut builder = self.http.request(method, &url);
+        let mut builder = self.http.request(method.clone(), &url);
         let auth = self.auth.read().expect("auth lock poisoned").clone();
         builder = Self::apply_auth(&auth, builder);
 
@@ -127,7 +139,15 @@ impl SplunkClient {
         let resp = builder.send().await?;
         let status = resp.status();
         if is_login_redirect(resp.url()) {
-            return Err(SplunkError::SessionExpired);
+            return Err(SplunkError::SessionExpired {
+                message: format!(
+                    "{} {} redirected to {} (HTTP {})",
+                    method_name(&method),
+                    path,
+                    resp.url().path(),
+                    status.as_u16()
+                ),
+            });
         }
 
         if !status.is_success() {
@@ -135,7 +155,9 @@ impl SplunkClient {
             let message = extract_splunk_message(&body).unwrap_or(body);
             if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
                 if auth.token.is_none() {
-                    return Err(SplunkError::SessionExpired);
+                    return Err(SplunkError::SessionExpired {
+                        message: format!("request returned HTTP {}", status.as_u16()),
+                    });
                 }
                 return Err(SplunkError::AuthFailed {
                     status: status.as_u16(),
@@ -169,6 +191,37 @@ impl SplunkClient {
     ) -> Result<SplunkResults> {
         self.log(&format!("oneshot search: {query}"));
         let search = normalize_query(query);
+
+        if self.chrome_auth {
+            let auth = self.auth.read().expect("auth lock poisoned").clone();
+            let profile = self.chrome_profile.as_deref().expect("Chrome profile set");
+            let raw = match crate::chrome_auth::run_oneshot_search(
+                &auth.base_url,
+                profile,
+                &search,
+                earliest_time,
+                latest_time,
+                max_results,
+            )
+            .await
+            {
+                Err(SplunkError::SessionExpired { .. }) => {
+                    crate::chrome_auth::open_login_and_wait(&auth.base_url, profile, None, true)
+                        .await?;
+                    crate::chrome_auth::run_oneshot_search(
+                        &auth.base_url,
+                        profile,
+                        &search,
+                        earliest_time,
+                        latest_time,
+                        max_results,
+                    )
+                    .await?
+                }
+                result => result?,
+            };
+            return parse_export_results(&raw);
+        }
 
         let resp = self
             .post(
@@ -461,9 +514,50 @@ impl SplunkClient {
     }
 }
 
+fn parse_export_results(raw: &str) -> Result<SplunkResults> {
+    let mut results = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let parsed: serde_json::Value =
+            serde_json::from_str(line).map_err(|_| SplunkError::RequestFailed {
+                status: 200,
+                message: "Splunk returned a non-JSON export response".into(),
+            })?;
+        if let Some(result) = parsed.get("result") {
+            let row = serde_json::from_value::<SplunkResultRow>(result.clone())?;
+            results.push(row);
+        } else if parsed
+            .get("messages")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|messages| {
+                messages.iter().any(|message| {
+                    message.get("type").and_then(serde_json::Value::as_str) == Some("ERROR")
+                })
+            })
+        {
+            return Err(SplunkError::RequestFailed {
+                status: 200,
+                message: "Splunk export reported a search error".into(),
+            });
+        }
+    }
+    Ok(SplunkResults {
+        results,
+        fields: Vec::new(),
+        preview: false,
+    })
+}
+
 fn is_login_redirect(url: &reqwest::Url) -> bool {
     url.path().ends_with("/account/login")
         || url.query().is_some_and(|q| q.contains("session_expired=1"))
+}
+
+fn method_name(method: &Method) -> &str {
+    method.as_str()
 }
 
 fn is_safe_retry(method: &Method, path: &str) -> bool {
@@ -508,7 +602,7 @@ impl AclDefault for Option<Acl> {
 
 #[cfg(test)]
 mod auth_tests {
-    use super::{is_login_redirect, is_safe_retry};
+    use super::{is_login_redirect, is_safe_retry, parse_export_results};
 
     #[test]
     fn recognizes_splunk_login_redirects() {
@@ -543,5 +637,29 @@ mod auth_tests {
             &reqwest::Method::POST,
             "/services/saved/searches/test/dispatch"
         ));
+    }
+
+    #[test]
+    fn rejects_non_json_export_responses_instead_of_reporting_no_results() {
+        let error = parse_export_results("<html>login page</html>").unwrap_err();
+        assert!(error.to_string().contains("non-JSON export response"));
+    }
+
+    #[test]
+    fn accepts_empty_export_responses_with_only_splunk_metadata() {
+        assert!(parse_export_results("").unwrap().results.is_empty());
+        assert!(
+            parse_export_results(r#"{"messages":[]}"#)
+                .unwrap()
+                .results
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn rejects_export_streams_that_contain_a_splunk_error_message() {
+        let error = parse_export_results(r#"{"messages":[{"type":"ERROR","text":"redacted"}]}"#)
+            .unwrap_err();
+        assert!(error.to_string().contains("reported a search error"));
     }
 }

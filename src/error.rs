@@ -17,14 +17,11 @@ pub enum SplunkError {
     )]
     AuthFailed { status: u16 },
 
-    #[error("Chrome session expired")]
-    SessionExpired,
+    #[error("Chrome browser request was rejected by Splunk: {message}")]
+    SessionExpired { message: String },
 
     #[error("Chrome session was refreshed; rerun this command to retry")]
     SessionRenewed,
-
-    #[error("No active Chrome session is available for this Splunk host")]
-    ChromeSessionUnavailable,
 
     #[error("Splunk request failed ({status}): {message}")]
     RequestFailed { status: u16, message: String },
