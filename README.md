@@ -38,6 +38,19 @@ profile:
   splunk config set-cookie --cookie "<full Cookie header>" --form-key "<splunkweb_csrf_token_8000 value>"
   ```
 
+- **Existing Chrome session** (macOS only; reads host-scoped cookies from the
+  selected Chrome profile for one invocation, without saving them):
+
+  ```bash
+  splunk --chrome-auth search 'index=ghs_ppe level=ERROR'
+  splunk --chrome-auth --chrome-profile "Profile 1" search 'index=ghs_ppe level=ERROR'
+  ```
+
+  Chrome must already be signed in to Splunk. The first use may prompt for
+  Keychain access to Chrome Safe Storage. Only cookies for the configured
+  Splunk host are read; cookie encryption formats not supported by Chrome's
+  local Safe Storage key cannot be used by this option.
+
 Config is stored at `~/.config/splunk-cli/config.toml`. Multiple profiles are
 supported via `--profile <name>` on any command and `splunk config set-token/
 set-cookie --profile <name>`; set the default with `splunk config use-profile <name>`.

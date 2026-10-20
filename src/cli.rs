@@ -20,6 +20,19 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub debug: bool,
 
+    /// Use cookies from the signed-in Chrome profile for this invocation
+    #[arg(long, global = true)]
+    pub chrome_auth: bool,
+
+    /// Chrome profile directory name to read (for example, "Default" or "Profile 1")
+    #[arg(
+        long,
+        global = true,
+        requires = "chrome_auth",
+        default_value = "Default"
+    )]
+    pub chrome_profile: String,
+
     #[command(subcommand)]
     pub command: Commands,
 }

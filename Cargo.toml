@@ -9,15 +9,22 @@ name = "splunk"
 path = "src/main.rs"
 
 [dependencies]
+aes = "0.8.4"
+cbc = "0.1.2"
 clap = { version = "4.6.7", features = ["derive", "env"] }
 clap_complete = "4.6.11"
 comfy-table = "8.0.1"
+pbkdf2 = "0.12.2"
 dirs = "7.0.0"
+hmac = "0.12.1"
 reqwest = { version = "0.13.5", features = ["json", "cookies", "query", "form"] }
 roxmltree = "0.21.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+sha1 = "0.10.6"
+sha2 = "0.10.9"
 thiserror = "2.0.21"
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros"] }
 toml = "1.1.8"
+url = "2.5.8"
 urlencoding = "2.1.3"
