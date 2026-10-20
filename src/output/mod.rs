@@ -101,7 +101,13 @@ pub fn print_alerts(items: &[Alert], format: Format) {
         println!("No fired alerts found.");
         return;
     }
-    let mut table = new_table(vec!["Name", "Saved Search", "Triggered At", "Severity", "App"]);
+    let mut table = new_table(vec![
+        "Name",
+        "Saved Search",
+        "Triggered At",
+        "Severity",
+        "App",
+    ]);
     for a in items {
         table.add_row(vec![
             Cell::new(&a.name),

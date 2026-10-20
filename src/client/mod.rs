@@ -334,7 +334,10 @@ impl SplunkClient {
         app: Option<&str>,
         filter: Option<&str>,
     ) -> Result<Vec<SavedSearch>> {
-        let mut query = vec![("output_mode", "json".to_string()), ("count", "50".to_string())];
+        let mut query = vec![
+            ("output_mode", "json".to_string()),
+            ("count", "50".to_string()),
+        ];
         if let Some(f) = filter {
             query.push(("search", f.to_string()));
         }
@@ -395,7 +398,10 @@ impl SplunkClient {
         let results_resp = self
             .get(
                 &format!("/services/search/jobs/{sid}/results"),
-                &[("output_mode", "json".to_string()), ("count", "100".to_string())],
+                &[
+                    ("output_mode", "json".to_string()),
+                    ("count", "100".to_string()),
+                ],
             )
             .await?;
         let results: SplunkResults = results_resp.json().await?;
@@ -438,7 +444,10 @@ impl SplunkClient {
         let resp = self
             .get(
                 "/services/data/indexes",
-                &[("output_mode", "json".to_string()), ("count", "-1".to_string())],
+                &[
+                    ("output_mode", "json".to_string()),
+                    ("count", "-1".to_string()),
+                ],
             )
             .await?;
         let data: AtomFeed<IndexContent> = resp.json().await?;
@@ -463,7 +472,10 @@ impl SplunkClient {
         app: Option<&str>,
         filter: Option<&str>,
     ) -> Result<Vec<Dashboard>> {
-        let mut query = vec![("output_mode", "json".to_string()), ("count", "50".to_string())];
+        let mut query = vec![
+            ("output_mode", "json".to_string()),
+            ("count", "50".to_string()),
+        ];
         if let Some(f) = filter {
             query.push(("search", f.to_string()));
         }
@@ -502,7 +514,9 @@ impl SplunkClient {
             None => format!("/services/data/ui/views/{encoded_name}"),
         };
 
-        let resp = self.get(&path, &[("output_mode", "json".to_string())]).await?;
+        let resp = self
+            .get(&path, &[("output_mode", "json".to_string())])
+            .await?;
         let data: AtomFeed<DashboardXmlContent> = resp.json().await?;
         let raw_xml = data
             .entry

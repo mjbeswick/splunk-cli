@@ -17,7 +17,11 @@ use output::Format;
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    let format = if cli.json { Format::Json } else { Format::Table };
+    let format = if cli.json {
+        Format::Json
+    } else {
+        Format::Table
+    };
 
     if let Err(e) = run(cli, format).await {
         eprintln!("Error: {e}");
@@ -80,7 +84,9 @@ async fn run(cli: Cli, format: Format) -> error::Result<()> {
     match cli.command {
         Commands::Search(args) => commands::handle_search(&client, &args, true, format).await,
         Commands::SearchAsync(args) => commands::handle_search(&client, &args, false, format).await,
-        Commands::SavedSearches(cmd) => commands::handle_saved_searches(&client, &cmd, format).await,
+        Commands::SavedSearches(cmd) => {
+            commands::handle_saved_searches(&client, &cmd, format).await
+        }
         Commands::Alerts { count } => commands::handle_alerts(&client, count, format).await,
         Commands::Indexes => commands::handle_indexes(&client, format).await,
         Commands::Dashboards(cmd) => commands::handle_dashboards(&client, &cmd, format).await,
