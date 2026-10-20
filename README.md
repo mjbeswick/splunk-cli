@@ -96,12 +96,35 @@ splunk dashboards panels "GHS Overview"
 
 # Raw JSON output (scripting / piping to jq)
 splunk --json search 'index=ghs_ppe level=ERROR' | jq '.results[].message'
-
-# Shell completions
-splunk completions zsh > ~/.zfunc/_splunk
 ```
 
 Run `splunk <command> --help` for full flag reference on any subcommand.
+
+### Shell completions
+
+Generate and install completions for your shell. Re-run the command after
+upgrading `splunk` so the completions reflect the installed CLI. These examples
+assume the corresponding shell completion support is enabled:
+
+```bash
+# Bash (bash-completion)
+mkdir -p ~/.local/share/bash-completion/completions
+splunk completions bash > ~/.local/share/bash-completion/completions/splunk
+
+# Zsh: add ~/.zfunc to fpath before compinit in ~/.zshrc, if not already present
+mkdir -p ~/.zfunc
+splunk completions zsh > ~/.zfunc/_splunk
+
+# Fish
+mkdir -p ~/.config/fish/completions
+splunk completions fish > ~/.config/fish/completions/splunk.fish
+```
+
+For Zsh, ensure `fpath=(~/.zfunc $fpath)` appears before
+`autoload -Uz compinit && compinit` in `~/.zshrc`; restart the shell or reload
+the relevant completion setup after installation. `splunk completions --help`
+lists all supported generators (`bash`, `elvish`, `fish`, `powershell`, and
+`zsh`).
 
 ## Output
 
