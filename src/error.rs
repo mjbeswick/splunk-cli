@@ -34,6 +34,9 @@ pub enum SplunkError {
     #[error("Config error: {0}")]
     Config(String),
 
+    #[error("Skill error: {0}")]
+    Other(String),
+
     #[error(transparent)]
     Http(#[from] reqwest::Error),
 

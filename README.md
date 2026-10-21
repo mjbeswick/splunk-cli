@@ -100,6 +100,25 @@ splunk --json search 'index=ghs_ppe level=ERROR' | jq '.results[].message'
 
 Run `splunk <command> --help` for full flag reference on any subcommand.
 
+### Agent skills
+
+The binary embeds the canonical `splunk-cli` skill. Skill operations are local
+and work without Splunk credentials:
+
+```bash
+splunk skills list
+splunk skills show splunk-cli
+splunk skills install --target opencode
+splunk skills install --force
+```
+
+`skills list` includes the bundled skill and recursively discovered local
+`SKILL.md` files in common workspace/user agent directories. Add extra roots
+with `SPLUNK_CLI_SKILLS_PATH` (platform path separator). `--target` accepts
+`claude`, `opencode`, or `agents`; without it all three are installed. Existing
+files are preserved unless `--force` is given. Shell completions and auth
+profiles continue to work as before; the skill commands run before auth setup.
+
 ### Shell completions
 
 Generate and install completions for your shell. Re-run the command after

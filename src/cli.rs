@@ -67,6 +67,10 @@ pub enum Commands {
     #[command(subcommand)]
     Config(ConfigCommands),
 
+    /// Discover, show, and install agent skills without Splunk credentials
+    #[command(subcommand)]
+    Skills(SkillsCommands),
+
     /// Generate shell completion scripts
     Completions {
         #[arg(value_enum)]
@@ -162,4 +166,21 @@ pub enum ConfigCommands {
     Show,
     /// Set the default profile used when --profile is not passed
     UseProfile { name: String },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SkillsCommands {
+    /// List bundled and locally discovered skills
+    List,
+    /// Print one skill's complete SKILL.md instructions
+    Show { name: String },
+    /// Install this CLI's bundled skill into common agent skill directories
+    Install {
+        /// Install into this target only (claude, opencode, agents); repeatable. Defaults to all.
+        #[arg(long = "target", value_enum)]
+        targets: Vec<crate::skills::Target>,
+        /// Replace an existing regular SKILL.md file
+        #[arg(long)]
+        force: bool,
+    },
 }

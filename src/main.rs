@@ -5,6 +5,7 @@ mod commands;
 mod config;
 mod error;
 mod output;
+mod skills;
 mod types;
 
 use clap::{CommandFactory, Parser};
@@ -32,6 +33,7 @@ async fn main() {
 async fn run(cli: Cli, format: Format) -> error::Result<()> {
     // Completions and config don't need a live Splunk client / auth.
     match &cli.command {
+        Commands::Skills(command) => return run_skills(&command, format),
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
             let name = cmd.get_name().to_string();
@@ -90,6 +92,44 @@ async fn run(cli: Cli, format: Format) -> error::Result<()> {
         Commands::Alerts { count } => commands::handle_alerts(&client, count, format).await,
         Commands::Indexes => commands::handle_indexes(&client, format).await,
         Commands::Dashboards(cmd) => commands::handle_dashboards(&client, &cmd, format).await,
-        Commands::Config(_) | Commands::Completions { .. } => unreachable!(),
+        Commands::Config(_) | Commands::Completions { .. } | Commands::Skills(_) => {
+            unreachable!()
+        }
+    }
+}
+
+fn run_skills(command: &cli::SkillsCommands, format: Format) -> error::Result<()> {
+    match command {
+        cli::SkillsCommands::List => {
+            let skills = skills::discover();
+            if matches!(format, Format::Json) {
+                println!("{}", serde_json::to_string_pretty(&skills).unwrap());
+            } else {
+                for skill in skills {
+                    println!(
+                        "{}\t{}\t{}",
+                        skill.name,
+                        if skill.bundled {
+                            "(bundled)".to_owned()
+                        } else {
+                            skill.path.unwrap_or_default().display().to_string()
+                        },
+                        skill.description
+                    );
+                }
+            }
+            Ok(())
+        }
+        cli::SkillsCommands::Show { name } => {
+            let text = skills::show(name).map_err(SplunkError::Other)?;
+            print!("{text}");
+            Ok(())
+        }
+        cli::SkillsCommands::Install { targets, force } => {
+            for path in skills::install(targets, *force).map_err(SplunkError::Other)? {
+                println!("installed\t{}", path.display());
+            }
+            Ok(())
+        }
     }
 }
