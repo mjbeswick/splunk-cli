@@ -38,7 +38,14 @@ impl SplunkClient {
     }
 
     pub fn with_chrome_fallback(mut self, chrome_profile: Option<String>) -> Self {
-        self.fallback_chrome_profile = chrome_profile;
+        // Only bearer-token profiles fall back. Cookie profiles keep their own failure semantics.
+        let bearer = self
+            .auth
+            .read()
+            .expect("auth lock poisoned")
+            .token
+            .is_some();
+        self.fallback_chrome_profile = chrome_profile.filter(|_| bearer);
         self
     }
 
@@ -697,6 +704,32 @@ mod auth_tests {
         assert!(text.contains("non-JSON response body"));
         assert!(!text.contains("<html>"));
         assert!(is_bearer_rejection(&err));
+    }
+
+    #[test]
+    fn chrome_fallback_is_limited_to_bearer_token_profiles() {
+        let base_url = "https://splunk.example".to_string();
+        let cookie_auth = crate::config::ResolvedAuth {
+            base_url: base_url.clone(),
+            token: None,
+            cookie: Some("name=value".into()),
+            form_key: Some("key".into()),
+        };
+        let client = super::SplunkClient::new(cookie_auth, false)
+            .expect("client builds")
+            .with_chrome_fallback(Some("Default".into()));
+        assert!(client.fallback_chrome_profile.is_none());
+
+        let bearer_auth = crate::config::ResolvedAuth {
+            base_url,
+            token: Some("placeholder".into()),
+            cookie: None,
+            form_key: None,
+        };
+        let client = super::SplunkClient::new(bearer_auth, false)
+            .expect("client builds")
+            .with_chrome_fallback(Some("Default".into()));
+        assert_eq!(client.fallback_chrome_profile.as_deref(), Some("Default"));
     }
 
     #[test]
