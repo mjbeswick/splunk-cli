@@ -16,6 +16,9 @@ pub struct SplunkClient {
     auth: RwLock<ResolvedAuth>,
     chrome_profile: Option<String>,
     chrome_auth: bool,
+    /// Chrome profile used to retry a rejected bearer search with an existing
+    /// browser session. Set only when the config profile opts in; never opens sign-in.
+    fallback_chrome_profile: Option<String>,
     pub debug: bool,
 }
 
@@ -29,8 +32,14 @@ impl SplunkClient {
             auth: RwLock::new(auth),
             chrome_profile: None,
             chrome_auth: false,
+            fallback_chrome_profile: None,
             debug,
         })
+    }
+
+    pub fn with_chrome_fallback(mut self, chrome_profile: Option<String>) -> Self {
+        self.fallback_chrome_profile = chrome_profile;
+        self
     }
 
     pub fn new_with_chrome_auth(
@@ -152,21 +161,11 @@ impl SplunkClient {
 
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            let message = extract_splunk_message(&body).unwrap_or(body);
-            if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-                if is_chrome_session_auth(&self.chrome_profile) {
-                    return Err(SplunkError::SessionExpired {
-                        message: format!("request returned HTTP {}", status.as_u16()),
-                    });
-                }
-                return Err(SplunkError::AuthFailed {
-                    status: status.as_u16(),
-                });
-            }
-            return Err(SplunkError::RequestFailed {
-                status: status.as_u16(),
-                message,
-            });
+            return Err(classify_error_response(
+                status,
+                &body,
+                is_chrome_session_auth(&self.chrome_profile),
+            ));
         }
 
         Ok(resp)
@@ -235,20 +234,48 @@ impl SplunkClient {
             return parse_export_results(&raw);
         }
 
-        let resp = self
+        let posted = self
             .post(
                 "/services/search/jobs/export",
                 &[
-                    ("search", search),
+                    ("search", search.clone()),
                     ("output_mode", "json".to_string()),
                     ("earliest_time", earliest_time.to_string()),
                     ("latest_time", latest_time.to_string()),
                     ("count", max_results.to_string()),
                 ],
             )
-            .await?;
+            .await;
 
-        let raw = resp.text().await?;
+        let raw = match posted {
+            Ok(resp) => resp.text().await?,
+            Err(err) if is_bearer_rejection(&err) && self.fallback_chrome_profile.is_some() => {
+                let profile = self.fallback_chrome_profile.clone().expect("checked above");
+                let base_url = self
+                    .auth
+                    .read()
+                    .expect("auth lock poisoned")
+                    .base_url
+                    .clone();
+                self.log("bearer search rejected; retrying once with the existing Chrome session");
+                crate::chrome_auth::run_oneshot_search(
+                    &base_url,
+                    &profile,
+                    &search,
+                    earliest_time,
+                    latest_time,
+                    max_results,
+                )
+                .await
+                .map_err(|e| match e {
+                    SplunkError::SessionExpired { .. } => SplunkError::Config(format!(
+                        "bearer search was rejected ({err}) and no signed-in Chrome session is available for fallback. Sign in once with `splunk --chrome-auth search ...`, then retry."
+                    )),
+                    other => other,
+                })?
+            }
+            Err(err) => return Err(err),
+        };
         parse_export_results(&raw)
     }
 
@@ -559,6 +586,39 @@ fn parse_export_results(raw: &str) -> Result<SplunkResults> {
     })
 }
 
+/// Map a non-success Splunk response to a user-facing error. Raw non-JSON bodies
+/// (for example HTML gateway pages) are never echoed; only Splunk's message text is.
+fn classify_error_response(status: StatusCode, body: &str, chrome_session: bool) -> SplunkError {
+    let message = extract_splunk_message(body)
+        .unwrap_or_else(|| format!("non-JSON response body ({} bytes)", body.len()));
+    match status {
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN if chrome_session => {
+            SplunkError::SessionExpired {
+                message: format!("request returned HTTP {}", status.as_u16()),
+            }
+        }
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => SplunkError::AuthFailed {
+            status: status.as_u16(),
+        },
+        StatusCode::METHOD_NOT_ALLOWED if !chrome_session => SplunkError::AuthMethodRejected {
+            status: status.as_u16(),
+            message,
+        },
+        _ => SplunkError::RequestFailed {
+            status: status.as_u16(),
+            message,
+        },
+    }
+}
+
+/// True when a bearer-authenticated request was refused, so a browser-session retry may help.
+fn is_bearer_rejection(err: &SplunkError) -> bool {
+    matches!(
+        err,
+        SplunkError::AuthFailed { .. } | SplunkError::AuthMethodRejected { .. }
+    )
+}
+
 fn is_login_redirect(url: &reqwest::Url) -> bool {
     url.path().ends_with("/account/login")
         || url.query().is_some_and(|q| q.contains("session_expired=1"))
@@ -614,7 +674,60 @@ impl AclDefault for Option<Acl> {
 
 #[cfg(test)]
 mod auth_tests {
-    use super::{is_chrome_session_auth, is_login_redirect, is_safe_retry, parse_export_results};
+    use super::{
+        classify_error_response, is_bearer_rejection, is_chrome_session_auth, is_login_redirect,
+        is_safe_retry, parse_export_results,
+    };
+    use crate::error::SplunkError;
+    use reqwest::StatusCode;
+
+    #[test]
+    fn bearer_405_is_classified_separately_and_never_echoes_html() {
+        let err = classify_error_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "<html><body>405 Method Not Allowed</body></html>",
+            false,
+        );
+        assert!(matches!(
+            err,
+            SplunkError::AuthMethodRejected { status: 405, .. }
+        ));
+        let text = err.to_string();
+        assert!(text.contains("rejected the bearer token request (HTTP 405)"));
+        assert!(text.contains("non-JSON response body"));
+        assert!(!text.contains("<html>"));
+        assert!(is_bearer_rejection(&err));
+    }
+
+    #[test]
+    fn bearer_401_and_403_remain_auth_failures() {
+        for status in [StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN] {
+            let err = classify_error_response(status, "", false);
+            assert!(matches!(err, SplunkError::AuthFailed { .. }));
+            assert!(is_bearer_rejection(&err));
+        }
+    }
+
+    #[test]
+    fn chrome_session_405_is_a_plain_request_failure_not_a_bearer_rejection() {
+        let err = classify_error_response(StatusCode::METHOD_NOT_ALLOWED, "", true);
+        assert!(matches!(
+            err,
+            SplunkError::RequestFailed { status: 405, .. }
+        ));
+        assert!(!is_bearer_rejection(&err));
+    }
+
+    #[test]
+    fn splunk_400_messages_are_surfaced_as_text() {
+        let err = classify_error_response(
+            StatusCode::BAD_REQUEST,
+            r#"{"messages":[{"type":"FATAL","text":"Unknown search command 'store_lookup'."}]}"#,
+            false,
+        );
+        assert!(err.to_string().contains("Unknown search command"));
+        assert!(!is_bearer_rejection(&err));
+    }
 
     #[test]
     fn recognizes_splunk_login_redirects() {

@@ -193,6 +193,11 @@ pub async fn run_oneshot_search(
             json!({"expression": expression, "awaitPromise": true, "returnByValue": true}),
         )
         .await?;
+    if let Some(message) = script_exception(&result) {
+        return Err(SplunkError::Config(format!(
+            "Chrome search script failed: {message}"
+        )));
+    }
     let Some(value) = result
         .get("result")
         .and_then(|remote| remote.get("value"))
@@ -258,13 +263,30 @@ pub async fn run_oneshot_search(
     if !(200..300).contains(&status) {
         return Err(SplunkError::RequestFailed {
             status: status as u16,
-            message: format!(
-                "Splunk browser request failed; body omitted ({} bytes)",
-                response_body.len()
-            ),
+            message: safe_auth_diagnostic(response_body),
         });
     }
     Ok(response_body.to_owned())
+}
+
+/// Describe a failed in-page script (for example a rejected fetch) without its
+/// response data. `Runtime.evaluate` reports these in `exceptionDetails`.
+fn script_exception(result: &Value) -> Option<String> {
+    let details = result.get("exceptionDetails")?;
+    let text = details
+        .get("exception")
+        .and_then(|e| e.get("description"))
+        .and_then(Value::as_str)
+        .or_else(|| details.get("text").and_then(Value::as_str))
+        .unwrap_or("unknown error");
+    Some(
+        text.lines()
+            .next()
+            .unwrap_or_default()
+            .chars()
+            .take(200)
+            .collect(),
+    )
 }
 
 fn safe_auth_diagnostic(body: &str) -> String {
@@ -621,9 +643,20 @@ pub async fn open_login_and_wait(
 #[cfg(test)]
 mod tests {
     use super::{
-        cookie_path_matches, safe_auth_diagnostic, session_changed, splunk_export_url,
-        validate_devtools_websocket, validate_splunk_url,
+        cookie_path_matches, safe_auth_diagnostic, script_exception, session_changed,
+        splunk_export_url, validate_devtools_websocket, validate_splunk_url,
     };
+    use serde_json::json;
+
+    #[test]
+    fn surfaces_the_first_line_of_a_script_exception() {
+        let result = json!({"exceptionDetails": {"text": "Uncaught", "exception": {"description": "TypeError: Failed to fetch\nat foo"}}});
+        assert_eq!(
+            script_exception(&result).as_deref(),
+            Some("TypeError: Failed to fetch")
+        );
+        assert_eq!(script_exception(&json!({"result": {"value": "{}"}})), None);
+    }
 
     #[test]
     fn detects_a_new_splunk_session_cookie_without_logging_values() {

@@ -80,7 +80,10 @@ async fn run(cli: Cli, format: Format) -> error::Result<()> {
     let client = if cli.chrome_auth {
         SplunkClient::new_with_chrome_auth(auth, cli.debug, cli.chrome_profile.clone())?
     } else {
-        SplunkClient::new(auth, cli.debug)?
+        let fallback = cfg
+            .chrome_fallback_enabled(cli.profile.as_deref())
+            .then(|| cli.chrome_profile.clone());
+        SplunkClient::new(auth, cli.debug)?.with_chrome_fallback(fallback)
     };
 
     match cli.command {

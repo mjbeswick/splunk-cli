@@ -76,10 +76,11 @@ pub fn handle_config(cmd: &ConfigCommands) -> Result<()> {
                     "(unconfigured)"
                 };
                 println!(
-                    "  - {name}: {auth_kind}, base_url={}",
+                    "  - {name}: {auth_kind}, base_url={}, chrome fallback={}",
                     p.base_url
                         .as_deref()
-                        .unwrap_or("https://splunk-operations.ocset.net")
+                        .unwrap_or("https://splunk-operations.ocset.net"),
+                    if p.chrome_fallback { "on" } else { "off" }
                 );
             }
         }
@@ -91,6 +92,15 @@ pub fn handle_config(cmd: &ConfigCommands) -> Result<()> {
             cfg.default_profile = Some(name.clone());
             cfg.save()?;
             println!("Default profile set to '{name}'");
+        }
+        ConfigCommands::SetChromeFallback { enabled, profile } => {
+            let mut cfg = Config::load()?;
+            cfg.profile_mut(profile).chrome_fallback = *enabled;
+            cfg.save()?;
+            println!(
+                "Chrome-session fallback for profile '{profile}': {}",
+                if *enabled { "enabled" } else { "disabled" }
+            );
         }
     }
     Ok(())

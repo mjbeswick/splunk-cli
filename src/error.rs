@@ -22,6 +22,11 @@ pub enum SplunkError {
     )]
     SessionExpired { message: String },
 
+    #[error(
+        "Splunk rejected the bearer token request (HTTP {status}). The token may lack search capability, or a gateway may block token-authenticated requests to this endpoint. Details: {message}"
+    )]
+    AuthMethodRejected { status: u16, message: String },
+
     #[error("Chrome session was refreshed; rerun this command to retry")]
     SessionRenewed,
 

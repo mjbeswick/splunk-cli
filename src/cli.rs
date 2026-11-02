@@ -166,6 +166,15 @@ pub enum ConfigCommands {
     Show,
     /// Set the default profile used when --profile is not passed
     UseProfile { name: String },
+    /// Allow a profile to retry a rejected bearer search once with the existing Chrome session.
+    /// Never opens a sign-in window; off by default.
+    SetChromeFallback {
+        /// true to enable, false to disable
+        #[arg(long, action = clap::ArgAction::Set)]
+        enabled: bool,
+        #[arg(long, default_value = "default")]
+        profile: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]

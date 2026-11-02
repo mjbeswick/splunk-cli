@@ -13,6 +13,10 @@ pub struct Profile {
     pub token: Option<String>,
     pub cookie: Option<String>,
     pub form_key: Option<String>,
+    /// Opt-in: retry a rejected bearer search once with the existing Chrome session.
+    /// Never opens a sign-in window, so it is safe for unattended runs.
+    #[serde(default)]
+    pub chrome_fallback: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -50,6 +54,27 @@ pub fn config_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("config.toml"))
 }
 
+/// Write the config file readable and writable by the owner only, since it can hold tokens.
+fn write_private_file(path: &std::path::Path, contents: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        options.mode(0o600);
+        let mut file = options.open(path)?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        file.write_all(contents)?;
+    }
+    #[cfg(not(unix))]
+    {
+        let mut file = options.open(path)?;
+        file.write_all(contents)?;
+    }
+    Ok(())
+}
+
 impl Config {
     pub fn load() -> Result<Self> {
         let path = config_path()?;
@@ -65,8 +90,22 @@ impl Config {
         let dir = config_dir()?;
         std::fs::create_dir_all(&dir)?;
         let raw = toml::to_string_pretty(self)?;
-        std::fs::write(config_path()?, raw)?;
+        write_private_file(&config_path()?, raw.as_bytes())?;
         Ok(())
+    }
+
+    /// Whether the named profile opted into the Chrome-session fallback.
+    pub fn chrome_fallback_enabled(&self, profile_name: Option<&str>) -> bool {
+        self.profiles
+            .get(&self.profile_name(profile_name))
+            .is_some_and(|p| p.chrome_fallback)
+    }
+
+    fn profile_name(&self, profile_name: Option<&str>) -> String {
+        profile_name
+            .map(str::to_string)
+            .or_else(|| self.default_profile.clone())
+            .unwrap_or_else(|| "default".to_string())
     }
 
     pub fn profile_mut(&mut self, name: &str) -> &mut Profile {
@@ -112,5 +151,34 @@ impl Config {
             .ok()
             .or_else(|| self.profiles.get(&name).and_then(|p| p.base_url.clone()))
             .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Config, Profile};
+
+    #[test]
+    fn chrome_fallback_is_off_by_default_and_follows_the_selected_profile() {
+        let mut cfg = Config {
+            default_profile: Some("work".into()),
+            ..Config::default()
+        };
+        cfg.profile_mut("work").token = Some("placeholder".into());
+        cfg.profile_mut("ops").token = Some("placeholder".into());
+        cfg.profile_mut("ops").chrome_fallback = true;
+
+        assert!(!cfg.chrome_fallback_enabled(None));
+        assert!(!cfg.chrome_fallback_enabled(Some("work")));
+        assert!(cfg.chrome_fallback_enabled(Some("ops")));
+        assert!(!cfg.chrome_fallback_enabled(Some("missing")));
+    }
+
+    #[test]
+    fn config_files_without_the_fallback_field_still_load() {
+        let raw = "default_profile = \"default\"\n\n[profiles.default]\ntoken = \"placeholder\"\n";
+        let cfg: Config = toml::from_str(raw).expect("older config parses");
+        let profile: &Profile = cfg.profiles.get("default").expect("profile present");
+        assert!(!profile.chrome_fallback);
     }
 }
